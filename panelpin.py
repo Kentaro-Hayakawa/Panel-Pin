@@ -462,7 +462,10 @@ class PanelPin:
                 dispv_index[2*(count[j]-1),j] = i
                 dispv_index[2*(count[j]-1)+1,j] = corner_index[i,j]
         # sum of face inner angles around vertices
-        sum_angle = np.sum(angle[dispv_index[::2]], axis=0)
+        sum_angle = np.zeros(self._nv)
+        for i in range(0, dispv_index.shape[0], 2):
+            aav = angle[dispv_index[i+1]]
+            sum_angle += aav
         # cross products of crease line vectors and face normals
         binormal = np.cross(direction, normal[:,fold_index[0]], axis=0)
         # indices of independent face displacement
@@ -707,7 +710,7 @@ class PanelPin:
             aav = self._angle[self._dispv_index[i+1]]
             ddv = self._corner[:,self._dispv_index[i+1]]
             dispv += aav*(dispf[0:3,self._dispv_index[i]] + np.sum(rot*ddv, axis=1) - ddv)
-        dispv = np.ravel(dispv/self._sum_angle)
+        dispv = np.ravel(dispv/self._sum_angle.reshape([1,self._nv]))
         return dispv
 
 
@@ -726,7 +729,7 @@ class PanelPin:
                 # w.r.t. rotation
                 drot = self._drot3D(dispf[3:6,self._dispv_index[i]],j)
                 dddv = np.sum(drot*ddv, axis=1)
-                ddispv[ii            , self._dispv_index[i]+self._nf*j+3*self._nf] += (aav/self._sum_angle)*dddv[0]
+                ddispv[ii           , self._dispv_index[i]+self._nf*j+3*self._nf] += (aav/self._sum_angle)*dddv[0]
                 ddispv[ii+self._nv  , self._dispv_index[i]+self._nf*j+3*self._nf] += (aav/self._sum_angle)*dddv[1]
                 ddispv[ii+2*self._nv, self._dispv_index[i]+self._nf*j+3*self._nf] += (aav/self._sum_angle)*dddv[2]
         return ddispv
@@ -1099,12 +1102,12 @@ class PathTargetAngle(PanelPin):
                  boundary_conds=(),             # tuple of dictionaries; Boundary conditions assigned to panel and vertex displacements
                  options={}                     # dictionary; Optional paramenters for path tracing
                  ):
+        # construct super-class
+        super(PathTargetAngle, self).__init__(vertex, face, crease, glued_panels=glued_panels,
+                                              stiff_per_length=1.0, weight_per_area=0.0,
+                                              boundary_conds=boundary_conds)
         # initialize variables in sub-class
         self.target_angle = target_angle
-        if 'weight' in options:
-            kkcpl = options['weight']    # Weight of energy at crease lines
-        else:
-            kkcpl = 1.
         if 'nitr_main' in options:
             self._maxitr = options['nitr_main']    # Maximum number of iterations of path tracing
         else:
@@ -1169,10 +1172,6 @@ class PathTargetAngle(PanelPin):
             self._ihistory = options['ihistory']    # Frequency for adding panel displacement data to history list
         else:
             self._ihistory = 1
-        # construct super-class
-        super(PathTargetAngle, self).__init__(vertex, face, crease, glued_panels=glued_panels,
-                                              stiff_per_length=kkcpl, weight_per_area=0.0,
-                                              boundary_conds=boundary_conds)
         # initialize path tracing
         self.success = False
         self.history = []
@@ -1199,7 +1198,7 @@ class PathTargetAngle(PanelPin):
         # eliminate fixed and glued DOF
         drho = drho[:,self._ivar] + drho[:,self._iadd]
         # gradient of squared error of folding angles
-        dd = -np.sum((self._stiff * (rho - self.target_angle)).reshape([self._nc,1]) * drho, axis=0)
+        dd = -np.sum((rho - self.target_angle).reshape([self._nc,1]) * drho, axis=0)
         # SVD of compatibiliy matrix
         _, ss, dmodeT = np.linalg.svd(self._comp)
         dmode = (dmodeT.T)[:,::-1]
@@ -1209,7 +1208,7 @@ class PathTargetAngle(PanelPin):
         # space of first-order infinitesimal mechanism
         dmodef = dmode[:,0:dof]
         # projection of steepest descent direction
-        ddp = np.dot(dmodef, np.dot(dmodef.T, dd))
+        ddp = np.dot(np.dot(dmodef, dmodef.T), dd)
         # initial length of predictor
         alpha = np.copy(self._delp)
         # Armijo line search
@@ -1217,9 +1216,9 @@ class PathTargetAngle(PanelPin):
             disp_curr = np.copy(self.disp)
             self.disp += np.append(alpha*ddp, 0)[self._iall]
             rho_new = self.foldangle()
-            err_new = 0.5 * np.dot(rho_new - self.target_angle, self._stiff * (rho_new - self.target_angle))
+            err_new = 0.5 * np.dot(rho_new - self.target_angle, rho_new - self.target_angle)
             self.disp = np.copy(disp_curr)
-            err_tol = 0.5 * np.dot(rho - self.target_angle, self._stiff * (rho - self.target_angle)) + self._xip * alpha * np.dot(-dd, ddp)
+            err_tol = 0.5 * np.dot(rho - self.target_angle, rho - self.target_angle) + self._xip * alpha * np.dot(-dd, ddp)
             if err_tol - err_new >= 0:
                 break
             alpha *= self._taup
@@ -1264,29 +1263,29 @@ class PathTargetAngle(PanelPin):
             self._comp = self.compatibility_matrix(forced_disp=False)
             # squared error of folding angles
             rho = self.foldangle()
-            err = 0.5 * np.dot(rho - self.target_angle, self._stiff * (rho - self.target_angle))
+            err = 0.5 * np.dot(rho - self.target_angle, rho - self.target_angle)
             # predictor
             pred = self._predictor()
-            # print path tracing process
-            if itr%self._iprint == 0:
-                print("%i  %.3e  %.3e  %.3e"%(itr,err,np.linalg.norm(pred),np.max(np.abs(self._incomp))))
-            # add data to history list
-            if itr%self._ihistory == 0:
-                self.history.append([itr, err, np.copy(self.disp)])
             # convergence condition
             if err < self._epst:
-                if self._iprint > 0 and itr%self._iprint != 0:
+                if self._iprint > 0:
                     print("%i  %.3e  %.3e  %.3e"%(itr,err,np.linalg.norm(pred),np.max(np.abs(self._incomp))))
                 self.message = "Squared error of folding angles is less than eps_target."
                 self.succeess = True
                 self.history.append([itr, err, np.copy(self.disp)])
                 break
             elif np.linalg.norm(pred) < self._epsg:
-                if self._iprint > 0 and itr%self._iprint != 0:
+                if self._iprint > 0:
                     print("%i  %.3e  %.3e  %.3e"%(itr,err,np.linalg.norm(pred),np.max(np.abs(self._incomp))))
                 self.message = "Norm of projected gradient is less than eps_grad."
                 self.history.append([itr, err, np.copy(self.disp)])
                 break
+            # print path tracing process
+            if itr%self._iprint == 0:
+                print("%i  %.3e  %.3e  %.3e"%(itr,err,np.linalg.norm(pred),np.max(np.abs(self._incomp))))
+            # add data to history list
+            if itr%self._ihistory == 0:
+                self.history.append([itr, err, np.copy(self.disp)])
             # update panel displacement
             self.disp += pred
             # correction of panel displacement
@@ -1308,8 +1307,8 @@ class PathTargetAngle(PanelPin):
             # break main iteration if corrector cannot reduce incompatibility
             if break_main or itr == self._maxitr-1:
                 rho = self.foldangle()
-                err = 0.5 * np.dot(rho - self.target_angle, self._stiff * (rho - self.target_angle))
-                if self._iprint > 0 and itr%self._iprint != 0:
+                err = 0.5 * np.dot(rho - self.target_angle, rho - self.target_angle)
+                if self._iprint > 0:
                     self._incomp = self.incompatibility_vector(forced_disp=False)
                     print("%i  %.3e  %.3e  %.3e"%(itr,err,np.linalg.norm(pred),np.max(np.abs(self._incomp))))
                 self.history.append([itr, err, np.copy(self.disp)])
