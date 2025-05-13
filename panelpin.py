@@ -462,7 +462,7 @@ class PanelPin:
                 dispv_index[2*(count[j]-1),j] = i
                 dispv_index[2*(count[j]-1)+1,j] = corner_index[i,j]
         # sum of face inner angles around vertices
-        sum_angle = np.zeros(self._nv)
+        sum_angle = np.zeros(nv)
         for i in range(0, dispv_index.shape[0], 2):
             aav = angle[dispv_index[i+1]]
             sum_angle += aav
